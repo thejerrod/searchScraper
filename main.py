@@ -1,69 +1,76 @@
 '''
-Main module to run the flask app
+Main module to run the web application.
 '''
 from flask import Flask, request, render_template, jsonify, send_file
 from selenium import webdriver
 from selenium.webdriver.chrome.options import Options
-from selenium.webdriver.common.by import By
 from selenium.webdriver.chrome.service import Service
+from webdriver_manager.chrome import ChromeDriverManager
+from selenium.webdriver.common.by import By
 from bs4 import BeautifulSoup
 import threading
 import sqlite3
 import time
+import csv
 
 app = Flask(__name__)
 app.debug = True
+depth = 0
 # function to scrape the search results
-def scrape_results(search_term):
+def scrape_results(search_term, depth):
     print("Scraping results for:", search_term)
     # set up the selenium webdriver
-    driver = webdriver.Chrome()
-    # set up the base url and query params
-    base_url = "https://my.f5.com/manage/s/global-search/%40uri"
-    query_params = {
-        "q": search_term,
-        "sort": "relevancy",
-        "numberOfResults": "10",
-        "&f:@f5_document_type":"[Support%20Solution]"
-    }
-    # build the url with the query params
-    url = base_url + "?" + "&".join([f"{key}={value}" for key, value in query_params.items()])
-    # Setup Selenium to use Chrome in headless mode
+    service = Service(executable_path='/usr/bin/chromedriver')
     options = webdriver.ChromeOptions()
     options.add_argument("--headless")
+    options.add_argument("--no-sandbox")  # Bypass OS security model, REQUIRED on Linux
+    options.add_argument('--remote-debugging-pipe') # for debug pipe
+    options.add_argument("--disable-gpu")
+    driver = webdriver.Chrome(service=service, options=options)
 
-    # Change the User-Agent based on the depth
-    if depth == 0:
-        options.add_argument("User-Agent: Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/91.0.4472.124 Safari/537.36")
-    else:
-        options.add_argument("Googlebot/2.1 (+http://www.google.com/bot.html)")
+    with webdriver.Chrome(service=service, options=options) as driver:
+    # set up the base url and query params
+      base_url = "https://34.211.108.47/manage/s/global-search/%40uri"
+      query_params = {
+          "q": search_term,
+          "sort": "relevancy",
+          "numberOfResults": "10",
+          "&f:@f5_document_type":"[Support%20Solution]"
+      }
+      # build the url with the query params
+      url = base_url + "?" + "&".join([f"{key}={value}" for key, value in query_params.items()])
 
-    prefs = {"profile.managed_default_content_settings.images": 2}  #dont download images
-    options.add_experimental_option("prefs", prefs)
-    driver = webdriver.Chrome(options = options)
+      # Change the User-Agent based on the depth
+      if depth == 0:
+          options.add_argument("User-Agent: Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/91.0.4472.124 Safari/537.36")
+      else:
+          options.add_argument("Googlebot/2.1 (+http://www.google.com/bot.html)")
 
-    # navigate to the url
-    driver.get(url)
-    # get the page source
-    page_source = driver.page_source
-    # parse the page source with beautiful soup
-    soup = BeautifulSoup(page_source, "html.parser")
-    # find all the search results
-    search_results = soup.find_all("div", class_="search-result")
-    # create a list to store the results
-    results = []
-    # loop through the search results
-    for result in search_results:
-        # extract the title, link, and excerpt for each search result
-        title = result.find("a", class_="search-result-title").text.strip()
-        link = result.find("a", class_="search-result-title")["href"]
-        excerpt = result.find("div", class_="search-result-excerpt").text.strip()
-        # add the result to the list of results
-        results.append({"title": title, "link": link, "excerpt": excerpt})
-    # close the webdriver
-    driver.quit()
-    # return the results
-    return results
+      prefs = {"profile.managed_default_content_settings.images": 2}  #dont download images
+      options.add_experimental_option("prefs", prefs)
+
+      # navigate to the url
+      driver.get(url)
+      # get the page source
+      page_source = driver.page_source
+      # parse the page source with beautiful soup
+      soup = BeautifulSoup(page_source, "html.parser")
+      # find all the search results
+      search_results = soup.find_all("div", class_="search-result")
+      # create a list to store the results
+      results = []
+      # loop through the search results
+      for result in search_results:
+          # extract the title, link, and excerpt for each search result
+          title = result.find("a", class_="search-result-title").text.strip()
+          link = result.find("a", class_="search-result-title")["href"]
+          excerpt = result.find("div", class_="search-result-excerpt").text.strip()
+          # add the result to the list of results
+          results.append({"title": title, "link": link, "excerpt": excerpt})
+      # close the webdriver
+      driver.quit()
+      # return the results
+      return results
 
 # function to recursively search the links from the results
 def recursive_search(links, depth, max_depth, results):
@@ -76,7 +83,7 @@ def recursive_search(links, depth, max_depth, results):
         if "cancel" in results and results["cancel"]:
             return
         # set up the selenium webdriver
-        driver = webdriver.Chrome()
+        #  **** driver = webdriver.Chrome()
         # navigate to the link
         driver.get(link)
         # get the page source
@@ -121,7 +128,7 @@ def recursive_search(links, depth, max_depth, results):
         recursive_search(page_links, depth + 1, max_depth, results)
 
 # function to handle the search request
-def handle_search_request(search_term):
+def handle_search_request(search_term, results):
     # set up the sqlite3 database
     print("Handling search request for:", search_term)
     with sqlite3.connect("results.db") as conn:
@@ -130,7 +137,7 @@ def handle_search_request(search_term):
         c.execute("CREATE TABLE IF NOT EXISTS results (title TEXT, link TEXT, excerpt TEXT)")
         # scrape the search results
         start_time = time.time()
-        results = scrape_results(search_term)
+        results = scrape_results(search_term, depth)
         total_time = time.time() - start_time
         # set up the results dictionary
         results_dict = {
@@ -171,7 +178,7 @@ def search():
         if not search_term:
             return render_template("search.html", error="Please enter a search term.")
         # handle the search request
-        results_dict = handle_search_request(search_term)
+        results_dict = handle_search_request(search_term, depth)
         # render the results page
         return render_template("results.html", results=results_dict)
     else:
